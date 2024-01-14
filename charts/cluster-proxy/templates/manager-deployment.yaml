@@ -17,7 +17,7 @@ spec:
       containers:
         - name: manager
           image: {{ .Values.registry }}/{{ .Values.image }}:{{ .Values.tag | default (print "v" .Chart.Version) }}
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           command:
             - /manager
           args:

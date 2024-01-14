@@ -1,9 +1,9 @@
 
 # Image URL to use all building/pushing image targets
-IMG ?= controller:latest
 IMAGE_REGISTRY_NAME ?= quay.io/open-cluster-management
 IMAGE_NAME = cluster-proxy
 IMAGE_TAG ?= latest
+IMG ?= $(IMAGE_REGISTRY_NAME)/$(IMAGE_NAME):$(IMAGE_TAG)
 E2E_TEST_CLUSTER_NAME ?= loopback
 # Produce CRDs that work back to Kubernetes 1.11 (no version conversion)
 CRD_OPTIONS ?= "crd:crdVersions={v1},allowDangerousTypes=true,generateEmbeddedObjectMeta=true"

@@ -29,9 +29,9 @@ func newServiceAccount(config *proxyv1alpha1.ManagedProxyConfiguration) *corev1.
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: config.Spec.ProxyServer.Namespace,
 			Name:      common.AddonName,
-			OwnerReferences: []metav1.OwnerReference{
-				newOwnerReference(config),
-			},
+			//OwnerReferences: []metav1.OwnerReference{
+			//	newOwnerReference(config),
+			//},
 		},
 	}
 }
@@ -41,9 +41,9 @@ func newProxySecret(config *proxyv1alpha1.ManagedProxyConfiguration, caData []by
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: config.Spec.ProxyServer.Namespace,
 			Name:      signerSecretName,
-			OwnerReferences: []metav1.OwnerReference{
-				newOwnerReference(config),
-			},
+			//OwnerReferences: []metav1.OwnerReference{
+			//	newOwnerReference(config),
+			//},
 		},
 		Data: map[string][]byte{
 			"ca.crt": caData,
@@ -55,9 +55,9 @@ func newProxyService(config *proxyv1alpha1.ManagedProxyConfiguration) *corev1.Se
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: config.Spec.ProxyServer.Namespace,
 			Name:      config.Spec.ProxyServer.InClusterServiceName,
-			OwnerReferences: []metav1.OwnerReference{
-				newOwnerReference(config),
-			},
+			//OwnerReferences: []metav1.OwnerReference{
+			//	newOwnerReference(config),
+			//},
 		},
 		Spec: corev1.ServiceSpec{
 			Selector: map[string]string{
@@ -83,9 +83,9 @@ func newProxyServerDeployment(config *proxyv1alpha1.ManagedProxyConfiguration) *
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: config.Spec.ProxyServer.Namespace,
 			Name:      config.Name,
-			OwnerReferences: []metav1.OwnerReference{
-				newOwnerReference(config),
-			},
+			//OwnerReferences: []metav1.OwnerReference{
+			//	newOwnerReference(config),
+			//},
 			Labels: map[string]string{
 				common.AnnotationKeyConfigurationGeneration: strconv.Itoa(int(config.Generation)),
 			},
@@ -193,9 +193,9 @@ func newProxyServerRole(config *proxyv1alpha1.ManagedProxyConfiguration) *rbacv1
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: config.Spec.ProxyServer.Namespace,
 			Name:      "cluster-proxy-addon-agent:portforward",
-			OwnerReferences: []metav1.OwnerReference{
-				newOwnerReference(config),
-			},
+			//OwnerReferences: []metav1.OwnerReference{
+			//	newOwnerReference(config),
+			//},
 		},
 		Rules: []rbacv1.PolicyRule{
 			{

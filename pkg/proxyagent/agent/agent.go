@@ -53,6 +53,7 @@ func NewAgentAddon(
 	v1CSRSupported bool,
 	runtimeClient client.Client,
 	nativeClient kubernetes.Interface,
+	hostClient kubernetes.Interface,
 	agentInstallAll bool,
 	enableKubeApiProxy bool,
 	addonClient addonclient.Interface) (agent.AgentAddon, error) {
@@ -134,7 +135,7 @@ func NewAgentAddon(
 			utils.AddOnDeploymentConfigGVR,
 		).
 		WithGetValuesFuncs(
-			GetClusterProxyValueFunc(runtimeClient, nativeClient, signerNamespace, caCertData, v1CSRSupported, enableKubeApiProxy),
+			GetClusterProxyValueFunc(runtimeClient, hostClient, signerNamespace, caCertData, v1CSRSupported, enableKubeApiProxy),
 			addonfactory.GetAddOnDeploymentConfigValues(
 				utils.NewAddOnDeploymentConfigGetter(addonClient),
 				toAgentAddOnChartValues(caCertData),
