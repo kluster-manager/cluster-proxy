@@ -31,6 +31,7 @@ import (
 	"open-cluster-management.io/cluster-proxy/pkg/config"
 	"open-cluster-management.io/cluster-proxy/pkg/proxyserver/operator/authentication/selfsigned"
 	"open-cluster-management.io/cluster-proxy/pkg/util"
+	clusterv1beta2sdk "open-cluster-management.io/sdk-go/pkg/apis/cluster/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -339,7 +340,7 @@ func managedClusterSetsToFilteredMap(managedClusterSets []clusterv1beta2.Managed
 		}
 
 		// only cluseterSet cover current cluster include in the list.
-		selector, err := clusterv1beta2.BuildClusterSelector(&mcs)
+		selector, err := clusterv1beta2sdk.BuildClusterSelector(&mcs)
 		if err != nil {
 			return nil, err
 		}
