@@ -18,6 +18,7 @@ import (
 	"github.com/openshift/library-go/pkg/operator/events"
 	"github.com/pkg/errors"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -47,12 +48,15 @@ var log = ctrl.Log.WithName("ClusterManagementAddonReconciler")
 func RegisterClusterManagementAddonReconciler(
 	mgr manager.Manager,
 	selfSigner selfsigned.SelfSigner,
+	hostClient client.Client,
 	nativeClient kubernetes.Interface,
 	secretInformer informercorev1.SecretInformer,
 	supportsV1CSR bool,
+	mcMode bool,
 ) error {
 	r := &ManagedProxyConfigurationReconciler{
 		Client:     mgr.GetClient(),
+		HostClient: hostClient,
 		SelfSigner: selfSigner,
 		CAPair:     selfSigner.CA(),
 		newCertRotatorFunc: func(namespace, name string, sans ...string) selfsigned.CertRotation {
@@ -72,12 +76,14 @@ func RegisterClusterManagementAddonReconciler(
 		EventRecorder:    events.NewInMemoryRecorder("ClusterManagementAddonReconciler"),
 
 		supportsV1CSR: supportsV1CSR,
+		mcMode:        mcMode,
 	}
 	return r.SetupWithManager(mgr)
 }
 
 type ManagedProxyConfigurationReconciler struct {
-	client.Client
+	Client           client.Client
+	HostClient       client.Client
 	SelfSigner       selfsigned.SelfSigner
 	CAPair           *crypto.CA
 	SecretLister     corev1listers.SecretLister
@@ -88,6 +94,7 @@ type ManagedProxyConfigurationReconciler struct {
 
 	newCertRotatorFunc func(namespace, name string, sans ...string) selfsigned.CertRotation
 	supportsV1CSR      bool
+	mcMode             bool
 }
 
 func (c *ManagedProxyConfigurationReconciler) SetupWithManager(mgr ctrl.Manager) error {
@@ -171,12 +178,40 @@ func (c *ManagedProxyConfigurationReconciler) deployProxyServer(config *proxyv1a
 		newProxyServerRole(config),
 		newProxyServerRoleBinding(config),
 	}
+	if c.mcMode {
+		var manager appsv1.Deployment
+		key := client.ObjectKey{
+			Namespace: config.Spec.ProxyServer.Namespace,
+			Name:      "cluster-proxy-addon-manager",
+		}
+		if err := c.HostClient.Get(context.Background(), key, &manager); err == nil {
+			ownerRef := metav1.NewControllerRef(&manager, schema.GroupVersionKind{
+				Group:   "apps",
+				Version: "v1",
+				Kind:    "Deployment",
+			})
+			for i, resource := range resources {
+				resource.SetOwnerReferences([]metav1.OwnerReference{
+					*ownerRef,
+				})
+				resources[i] = resource
+			}
+		}
+	} else {
+		for i, resource := range resources {
+			resource.SetOwnerReferences([]metav1.OwnerReference{
+				newOwnerReference(config),
+			})
+			resources[i] = resource
+		}
+	}
+
 	anyCreated := false
 	createdKinds := sets.NewString()
 	anyUpdated := false
 	updatedKinds := sets.NewString()
 	for _, resource := range resources {
-		gvks, _, err := c.Scheme().ObjectKinds(resource)
+		gvks, _, err := c.HostClient.Scheme().ObjectKinds(resource)
 		if err != nil {
 			return false, err
 		}
@@ -224,7 +259,7 @@ func (c *ManagedProxyConfigurationReconciler) ensure(incomingGeneration int64, g
 	// create if it doesn't exist
 	current := &unstructured.Unstructured{}
 	current.SetGroupVersionKind(gvk)
-	if err := c.Client.Get(
+	if err := c.HostClient.Get(
 		context.TODO(),
 		types.NamespacedName{
 			Namespace: resource.GetNamespace(),
@@ -239,7 +274,7 @@ func (c *ManagedProxyConfigurationReconciler) ensure(incomingGeneration int64, g
 			)
 		}
 		// if not found, then create
-		if err := c.Client.Create(context.TODO(), resource); err != nil {
+		if err := c.HostClient.Create(context.TODO(), resource); err != nil {
 			if !apierrors.IsAlreadyExists(err) {
 				return false, false, errors.Wrapf(err,
 					"failed to create resource kind: %s, namespace: %s, name %s",
@@ -270,7 +305,7 @@ func (c *ManagedProxyConfigurationReconciler) ensure(incomingGeneration int64, g
 	// update if generation bumped
 	if !created && int(incomingGeneration) > currentGeneration {
 		resource.SetResourceVersion(current.GetResourceVersion())
-		if err := c.Client.Update(context.TODO(), resource); err != nil {
+		if err := c.HostClient.Update(context.TODO(), resource); err != nil {
 			if apierrors.IsConflict(err) {
 				return c.ensure(incomingGeneration, gvk, resource)
 			}
@@ -353,7 +388,7 @@ func (c *ManagedProxyConfigurationReconciler) ensureEntrypoint(config *proxyv1al
 				},
 			},
 		}
-		if err := c.Client.Create(context.TODO(), proxyService); err != nil {
+		if err := c.HostClient.Create(context.TODO(), proxyService); err != nil {
 			if !apierrors.IsAlreadyExists(err) {
 				return "", errors.Wrapf(err, "failed to ensure entrypoint service for proxy-server")
 			}
@@ -451,11 +486,11 @@ func (c *ManagedProxyConfigurationReconciler) ensureBasicResources(config *proxy
 }
 
 func (c *ManagedProxyConfigurationReconciler) ensureNamespace(config *proxyv1alpha1.ManagedProxyConfiguration) error {
-	if err := c.Client.Get(context.TODO(), types.NamespacedName{
+	if err := c.HostClient.Get(context.TODO(), types.NamespacedName{
 		Name: config.Spec.ProxyServer.Namespace,
 	}, &corev1.Namespace{}); err != nil {
 		if apierrors.IsNotFound(err) {
-			if err := c.Client.Create(context.TODO(), &corev1.Namespace{
+			if err := c.HostClient.Create(context.TODO(), &corev1.Namespace{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: config.Spec.ProxyServer.Namespace,
 				},
@@ -541,11 +576,11 @@ func getAnnotation(list []proxyv1alpha1.AnnotationVar) map[string]string {
 	annotation := make(map[string]string, len(list))
 	for _, v := range list {
 		if errs := validation.IsQualifiedName(v.Key); len(errs) == 0 {
-			klog.Warningf("Annotation key %s validate failed: %s, skip it!", strings.Join(errs, ";"))
+			klog.Warningf("Annotation key %s validate failed: %s, skip it!", v.Key, strings.Join(errs, ";"))
 			continue
 		}
 		if errs := validation.IsValidLabelValue(v.Value); len(errs) > 0 {
-			klog.Warningf("Annotation value %s validate failed: %s, skip it!", strings.Join(errs, ";"))
+			klog.Warningf("Annotation value %s validate failed: %s, skip it!", v.Key, strings.Join(errs, ";"))
 			continue
 		}
 		annotation[v.Key] = v.Value

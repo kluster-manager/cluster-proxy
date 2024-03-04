@@ -31,6 +31,8 @@ import (
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog/v2"
 	"k8s.io/klog/v2/klogr"
 	"open-cluster-management.io/addon-framework/pkg/addonmanager"
@@ -46,7 +48,10 @@ import (
 	"open-cluster-management.io/cluster-proxy/pkg/proxyserver/controllers"
 	"open-cluster-management.io/cluster-proxy/pkg/proxyserver/operator/authentication/selfsigned"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	//+kubebuilder:scaffold:imports
 )
 
@@ -71,6 +76,7 @@ func main() {
 	var signerSecretNamespace, signerSecretName string
 	var agentInstallAll bool
 	var enableKubeApiProxy bool
+	var mcKubeconfig string
 
 	logger := klogr.New()
 	klog.SetOutput(os.Stdout)
@@ -94,16 +100,32 @@ func main() {
 		"Configure the install strategy of agent on managed clusters. "+
 			"Enabling this will automatically install agent on all managed cluster.")
 	flag.BoolVar(&enableKubeApiProxy, "enable-kube-api-proxy", true, "Enable proxy to agent kube-apiserver")
+	flag.StringVar(&mcKubeconfig, "multicluster-kubeconfig", "",
+		"The path to multicluster-controlplane kubeconfig")
 
 	flag.Parse()
 
 	// pipe controller-runtime logs to klog
 	ctrl.SetLogger(logger)
 
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+	var mcConfig, hostConfig *rest.Config
+
+	if mcKubeconfig != "" {
+		var err error
+		mcConfig, err = clientcmd.BuildConfigFromFlags("", mcKubeconfig)
+		if err != nil {
+			setupLog.Error(err, "unable to build multicluster rest config")
+			os.Exit(1)
+		}
+		hostConfig = ctrl.GetConfigOrDie()
+	} else {
+		hostConfig = ctrl.GetConfigOrDie()
+		mcConfig = hostConfig
+	}
+
+	mgr, err := ctrl.NewManager(mcConfig, ctrl.Options{
 		Scheme:                 scheme,
-		MetricsBindAddress:     metricsAddr,
-		Port:                   9443,
+		Metrics:                metricsserver.Options{BindAddress: metricsAddr},
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "cluster-proxy-addon-manager",
@@ -116,6 +138,12 @@ func main() {
 	client, err := versioned.NewForConfig(mgr.GetConfig())
 	if err != nil {
 		setupLog.Error(err, "unable to set up addon client")
+		os.Exit(1)
+	}
+
+	hostClient, err := kubernetes.NewForConfig(hostConfig)
+	if err != nil {
+		setupLog.Error(err, "unable to set up host kubernetes native client")
 		os.Exit(1)
 	}
 
@@ -147,22 +175,30 @@ func main() {
 	}
 
 	informerFactory := externalversions.NewSharedInformerFactory(client, 0)
-	nativeInformer := informers.NewSharedInformerFactoryWithOptions(nativeClient, 0)
+	hostInformer := informers.NewSharedInformerFactoryWithOptions(hostClient, 0, informers.WithNamespace(signerSecretNamespace))
 
 	// loading self-signer
 	selfSigner, err := selfsigned.NewSelfSignerFromSecretOrGenerate(
-		nativeClient, signerSecretNamespace, signerSecretName)
+		hostClient, signerSecretNamespace, signerSecretName)
 	if err != nil {
 		setupLog.Error(err, "failed loading self-signer")
+		os.Exit(1)
+	}
+
+	hostKubeClient, err := newHostClient(hostConfig)
+	if err != nil {
+		setupLog.Error(err, "failed create host KubeClient")
 		os.Exit(1)
 	}
 
 	if err := controllers.RegisterClusterManagementAddonReconciler(
 		mgr,
 		selfSigner,
-		nativeClient,
-		nativeInformer.Core().V1().Secrets(),
+		hostKubeClient,
+		hostClient,
+		hostInformer.Core().V1().Secrets(),
 		supportsV1CSR,
+		mcKubeconfig != "",
 	); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ClusterManagementAddonReconciler")
 		os.Exit(1)
@@ -195,6 +231,7 @@ func main() {
 		supportsV1CSR,
 		mgr.GetClient(),
 		nativeClient,
+		hostClient,
 		agentInstallAll,
 		enableKubeApiProxy,
 		addonClient,
@@ -212,7 +249,7 @@ func main() {
 	ctx, cancel := context.WithCancel(ctrl.SetupSignalHandler())
 	defer cancel()
 	go informerFactory.Start(ctx.Done())
-	go nativeInformer.Start(ctx.Done())
+	go hostInformer.Start(ctx.Done())
 	go func() {
 		if err := addonManager.Start(ctx); err != nil {
 			setupLog.Error(err, "unable to start addon manager")
@@ -224,4 +261,19 @@ func main() {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
+}
+
+func newHostClient(hostConfig *rest.Config) (client.Client, error) {
+	hc, err := rest.HTTPClientFor(hostConfig)
+	if err != nil {
+		return nil, err
+	}
+	mapper, err := apiutil.NewDynamicRESTMapper(hostConfig, hc)
+	if err != nil {
+		return nil, err
+	}
+	return client.New(hostConfig, client.Options{
+		Scheme: clientgoscheme.Scheme,
+		Mapper: mapper,
+	})
 }

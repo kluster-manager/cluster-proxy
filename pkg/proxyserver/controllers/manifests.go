@@ -7,7 +7,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/utils/pointer"
+	"k8s.io/utils/ptr"
 	proxyv1alpha1 "open-cluster-management.io/cluster-proxy/pkg/apis/proxy/v1alpha1"
 	"open-cluster-management.io/cluster-proxy/pkg/common"
 )
@@ -20,7 +20,7 @@ func newOwnerReference(config *proxyv1alpha1.ManagedProxyConfiguration) metav1.O
 		Kind:               "ManagedProxyConfiguration",
 		Name:               config.Name,
 		UID:                config.UID,
-		BlockOwnerDeletion: pointer.Bool(true),
+		BlockOwnerDeletion: ptr.To(true),
 	}
 }
 
@@ -29,9 +29,9 @@ func newServiceAccount(config *proxyv1alpha1.ManagedProxyConfiguration) *corev1.
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: config.Spec.ProxyServer.Namespace,
 			Name:      common.AddonName,
-			OwnerReferences: []metav1.OwnerReference{
-				newOwnerReference(config),
-			},
+			//OwnerReferences: []metav1.OwnerReference{
+			//	newOwnerReference(config),
+			//},
 		},
 	}
 }
@@ -41,9 +41,9 @@ func newProxySecret(config *proxyv1alpha1.ManagedProxyConfiguration, caData []by
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: config.Spec.ProxyServer.Namespace,
 			Name:      signerSecretName,
-			OwnerReferences: []metav1.OwnerReference{
-				newOwnerReference(config),
-			},
+			//OwnerReferences: []metav1.OwnerReference{
+			//	newOwnerReference(config),
+			//},
 		},
 		Data: map[string][]byte{
 			"ca.crt": caData,
@@ -55,9 +55,9 @@ func newProxyService(config *proxyv1alpha1.ManagedProxyConfiguration) *corev1.Se
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: config.Spec.ProxyServer.Namespace,
 			Name:      config.Spec.ProxyServer.InClusterServiceName,
-			OwnerReferences: []metav1.OwnerReference{
-				newOwnerReference(config),
-			},
+			//OwnerReferences: []metav1.OwnerReference{
+			//	newOwnerReference(config),
+			//},
 		},
 		Spec: corev1.ServiceSpec{
 			Selector: map[string]string{
@@ -83,9 +83,9 @@ func newProxyServerDeployment(config *proxyv1alpha1.ManagedProxyConfiguration) *
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: config.Spec.ProxyServer.Namespace,
 			Name:      config.Name,
-			OwnerReferences: []metav1.OwnerReference{
-				newOwnerReference(config),
-			},
+			//OwnerReferences: []metav1.OwnerReference{
+			//	newOwnerReference(config),
+			//},
 			Labels: map[string]string{
 				common.AnnotationKeyConfigurationGeneration: strconv.Itoa(int(config.Generation)),
 			},
@@ -112,7 +112,7 @@ func newProxyServerDeployment(config *proxyv1alpha1.ManagedProxyConfiguration) *
 						{
 							Name:            common.ComponentNameProxyServer,
 							Image:           config.Spec.ProxyServer.Image,
-							ImagePullPolicy: corev1.PullIfNotPresent,
+							ImagePullPolicy: corev1.PullAlways,
 							Command: []string{
 								"/proxy-server",
 							},
@@ -130,10 +130,10 @@ func newProxyServerDeployment(config *proxyv1alpha1.ManagedProxyConfiguration) *
 								Capabilities: &corev1.Capabilities{
 									Drop: []corev1.Capability{"ALL"},
 								},
-								Privileged:               pointer.Bool(false),
-								RunAsNonRoot:             pointer.Bool(true),
-								ReadOnlyRootFilesystem:   pointer.Bool(true),
-								AllowPrivilegeEscalation: pointer.Bool(false),
+								Privileged:               ptr.To(false),
+								RunAsNonRoot:             ptr.To(true),
+								ReadOnlyRootFilesystem:   ptr.To(true),
+								AllowPrivilegeEscalation: ptr.To(false),
 							},
 							VolumeMounts: []corev1.VolumeMount{
 								{
@@ -193,9 +193,9 @@ func newProxyServerRole(config *proxyv1alpha1.ManagedProxyConfiguration) *rbacv1
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: config.Spec.ProxyServer.Namespace,
 			Name:      "cluster-proxy-addon-agent:portforward",
-			OwnerReferences: []metav1.OwnerReference{
-				newOwnerReference(config),
-			},
+			//OwnerReferences: []metav1.OwnerReference{
+			//	newOwnerReference(config),
+			//},
 		},
 		Rules: []rbacv1.PolicyRule{
 			{
