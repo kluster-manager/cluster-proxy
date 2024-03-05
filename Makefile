@@ -95,7 +95,7 @@ undeploy: ## Undeploy controller from the K8s cluster specified in ~/.kube/confi
 
 CONTROLLER_GEN = $(shell pwd)/bin/controller-gen
 controller-gen: ## Download controller-gen locally if necessary.
-	$(call go-get-tool,$(CONTROLLER_GEN),sigs.k8s.io/controller-tools/cmd/controller-gen@v0.4.1)
+	$(call go-get-tool,$(CONTROLLER_GEN),sigs.k8s.io/controller-tools/cmd/controller-gen@v0.14.0)
 
 KUSTOMIZE = $(shell pwd)/bin/kustomize
 kustomize: ## Download kustomize locally if necessary.
@@ -116,7 +116,7 @@ rm -rf $$TMP_DIR ;\
 endef
 
 client-gen:
-	go install k8s.io/code-generator/cmd/client-gen@v0.23.0
+	go install k8s.io/code-generator/cmd/client-gen@v0.29.2
 	go install sigs.k8s.io/apiserver-runtime/tools/apiserver-runtime-gen@v1.1.1
 	apiserver-runtime-gen \
  	--module open-cluster-management.io/cluster-proxy \

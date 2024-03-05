@@ -1,19 +1,19 @@
 # Image registry
-registry: quay.io/open-cluster-management
+registry: ghcr.io/kluster-manager
 
 # Image of the cluster-gateway instances
 image: cluster-proxy
 
 # Image tag
-tag:
+tag: latest
 
 # Number of replicas
 replicas: 1
 
 spokeAddonNamespace: "open-cluster-management-cluster-proxy"
 
-proxyServerImage: quay.io/open-cluster-management/cluster-proxy
-proxyAgentImage: quay.io/open-cluster-management/cluster-proxy
+proxyServerImage: ghcr.io/kluster-manager/cluster-proxy
+proxyAgentImage: ghcr.io/kluster-manager/cluster-proxy
 
 proxyServer:
   entrypointLoadBalancer: false
