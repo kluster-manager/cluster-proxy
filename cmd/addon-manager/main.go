@@ -31,6 +31,7 @@ import (
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog/v2"
 	"k8s.io/klog/v2/textlogger"
 	"open-cluster-management.io/addon-framework/pkg/addonmanager"
@@ -69,6 +70,7 @@ func main() {
 	var probeAddr string
 	var signerSecretNamespace, signerSecretName string
 	var enableKubeApiProxy bool
+	var mcKubeconfig string
 
 	logger := textlogger.NewLogger(textlogger.NewConfig())
 	klog.SetOutput(os.Stdout)
@@ -88,13 +90,15 @@ func main() {
 	flag.BoolVar(&enableKubeApiProxy, "enable-kube-api-proxy", true, "Enable proxy to agent kube-apiserver")
 	flag.StringVar(&config.DefaultAddonInstallNamespace, "agent-install-namespace", config.DefaultAddonInstallNamespace,
 		"The default namespace to install the addon agents.")
+	flag.StringVar(&mcKubeconfig, "multicluster-kubeconfig", "",
+		"The path to multicluster-controlplane kubeconfig")
 
 	flag.Parse()
 
 	// pipe controller-runtime logs to klog
 	ctrl.SetLogger(logger)
 
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+	hostManager, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:                 scheme,
 		Metrics:                metricsserver.Options{BindAddress: metricsAddr},
 		HealthProbeBindAddress: probeAddr,
@@ -102,23 +106,54 @@ func main() {
 		LeaderElectionID:       "cluster-proxy-addon-manager",
 	})
 	if err != nil {
-		setupLog.Error(err, "unable to start manager")
+		setupLog.Error(err, "unable to create host manager")
 		os.Exit(1)
 	}
 
-	nativeClient, err := kubernetes.NewForConfig(mgr.GetConfig())
+	hostNativeClient, err := kubernetes.NewForConfig(hostManager.GetConfig())
 	if err != nil {
 		setupLog.Error(err, "unable to set up kubernetes native client")
 		os.Exit(1)
 	}
 
-	addonClient, err := addonclient.NewForConfig(mgr.GetConfig())
+	mcMode := mcKubeconfig != ""
+	var mcManager ctrl.Manager
+	var mcNativeClient kubernetes.Interface
+	if mcMode {
+		mcConfig, err := clientcmd.BuildConfigFromFlags("", mcKubeconfig)
+		if err != nil {
+			setupLog.Error(err, "unable to build multicluster rest config")
+			os.Exit(1)
+		}
+		mcManager, err = ctrl.NewManager(mcConfig, ctrl.Options{
+			Scheme:                 scheme,
+			Metrics:                metricsserver.Options{BindAddress: ""},
+			HealthProbeBindAddress: "",
+			LeaderElection:         enableLeaderElection,
+			LeaderElectionID:       "cluster-proxy-addon-manager",
+		})
+		if err != nil {
+			setupLog.Error(err, "unable to create mc manager")
+			os.Exit(1)
+		}
+
+		mcNativeClient, err = kubernetes.NewForConfig(mcManager.GetConfig())
+		if err != nil {
+			setupLog.Error(err, "unable to set up multicluster native client")
+			os.Exit(1)
+		}
+	} else {
+		mcManager = hostManager
+		mcNativeClient = hostNativeClient
+	}
+
+	addonClient, err := addonclient.NewForConfig(mcManager.GetConfig())
 	if err != nil {
 		setupLog.Error(err, "unable to set up ocm addon client")
 		os.Exit(1)
 	}
 
-	supportsV1CSR, supportsV1beta1CSR, err := addonutil.IsCSRSupported(nativeClient)
+	supportsV1CSR, supportsV1beta1CSR, err := addonutil.IsCSRSupported(mcNativeClient)
 	if err != nil {
 		setupLog.Error(err, "unable to detect available CSR API versions")
 		os.Exit(1)
@@ -133,43 +168,45 @@ func main() {
 		os.Exit(1)
 	}
 
-	nativeInformer := informers.NewSharedInformerFactoryWithOptions(nativeClient, 0)
+	hostNativeInformer := informers.NewSharedInformerFactoryWithOptions(hostNativeClient, 0)
 
 	// loading self-signer
 	selfSigner, err := selfsigned.NewSelfSignerFromSecretOrGenerate(
-		nativeClient, signerSecretNamespace, signerSecretName)
+		hostNativeClient, signerSecretNamespace, signerSecretName)
 	if err != nil {
 		setupLog.Error(err, "failed loading self-signer")
 		os.Exit(1)
 	}
 
 	if err := controllers.RegisterClusterManagementAddonReconciler(
-		mgr,
+		hostManager,
 		selfSigner,
-		nativeClient,
-		nativeInformer.Core().V1().Secrets(),
+		hostNativeClient,
+		hostNativeInformer.Core().V1().Secrets(),
+		mcManager,
+		mcMode,
 		supportsV1CSR,
 	); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ClusterManagementAddonReconciler")
 		os.Exit(1)
 	}
 
-	if err := controllers.RegisterServiceResolverReconciler(mgr); err != nil {
+	if err := controllers.RegisterServiceResolverReconciler(mcManager); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ServiceResolverReconciler")
 		os.Exit(1)
 	}
 
 	//+kubebuilder:scaffold:builder
-	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
+	if err := hostManager.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")
 		os.Exit(1)
 	}
-	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
+	if err := hostManager.AddReadyzCheck("readyz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up ready check")
 		os.Exit(1)
 	}
 
-	addonManager, err := addonmanager.New(mgr.GetConfig())
+	addonManager, err := addonmanager.New(mcManager.GetConfig())
 	if err != nil {
 		setupLog.Error(err, "unable to set up ready check")
 		os.Exit(1)
@@ -179,8 +216,9 @@ func main() {
 		selfSigner,
 		signerSecretNamespace,
 		supportsV1CSR,
-		mgr.GetClient(),
-		nativeClient,
+		mcManager.GetClient(),
+		mcNativeClient,
+		hostNativeClient,
 		enableKubeApiProxy,
 		addonClient,
 	)
@@ -196,17 +234,20 @@ func main() {
 
 	ctx, cancel := context.WithCancel(ctrl.SetupSignalHandler())
 	defer cancel()
-	go nativeInformer.Start(ctx.Done())
+	go hostNativeInformer.Start(ctx.Done())
 	go func() {
-		<-mgr.Elected()
+		<-hostManager.Elected()
 		if err := addonManager.Start(ctx); err != nil {
 			setupLog.Error(err, "unable to start addon manager")
 			os.Exit(1)
 		}
 	}()
-	setupLog.Info("starting manager")
-	if err := mgr.Start(ctx); err != nil {
-		setupLog.Error(err, "problem running manager")
+	if mcMode {
+		go mcManager.Start(ctx)
+	}
+	setupLog.Info("starting host manager")
+	if err := hostManager.Start(ctx); err != nil {
+		setupLog.Error(err, "problem running host manager")
 		os.Exit(1)
 	}
 }
