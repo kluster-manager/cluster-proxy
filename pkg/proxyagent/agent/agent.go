@@ -51,8 +51,9 @@ func NewAgentAddon(
 	signer selfsigned.SelfSigner,
 	signerNamespace string,
 	v1CSRSupported bool,
-	runtimeClient client.Client,
-	nativeClient kubernetes.Interface,
+	mcRtc client.Client,
+	mcNativeClient kubernetes.Interface,
+	hostNativeClient kubernetes.Interface,
 	agentInstallAll bool,
 	enableKubeApiProxy bool,
 	addonClient addonclient.Interface) (agent.AgentAddon, error) {
@@ -93,7 +94,7 @@ func NewAgentAddon(
 			CSRApproveCheck: func(cluster *clusterv1.ManagedCluster, addon *addonv1alpha1.ManagedClusterAddOn, csr *csrv1.CertificateSigningRequest) bool {
 				return cluster.Spec.HubAcceptsClient
 			},
-			PermissionConfig: utils.NewRBACPermissionConfigBuilder(nativeClient).
+			PermissionConfig: utils.NewRBACPermissionConfigBuilder(mcNativeClient).
 				WithStaticRole(&rbacv1.Role{
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "cluster-proxy-addon-agent",
@@ -134,7 +135,7 @@ func NewAgentAddon(
 			utils.AddOnDeploymentConfigGVR,
 		).
 		WithGetValuesFuncs(
-			GetClusterProxyValueFunc(runtimeClient, nativeClient, signerNamespace, caCertData, v1CSRSupported, enableKubeApiProxy),
+			GetClusterProxyValueFunc(mcRtc, hostNativeClient, signerNamespace, caCertData, v1CSRSupported, enableKubeApiProxy),
 			addonfactory.GetAddOnDeploymentConfigValues(
 				utils.NewAddOnDeploymentConfigGetter(addonClient),
 				toAgentAddOnChartValues(caCertData),
@@ -149,8 +150,8 @@ func NewAgentAddon(
 }
 
 func GetClusterProxyValueFunc(
-	runtimeClient client.Client,
-	nativeClient kubernetes.Interface,
+	mcRtc client.Client,
+	hostNativeClient kubernetes.Interface,
 	signerNamespace string,
 	caCertData []byte,
 	v1CSRSupported bool,
@@ -173,7 +174,7 @@ func GetClusterProxyValueFunc(
 		}
 
 		proxyConfig := &proxyv1alpha1.ManagedProxyConfiguration{}
-		if err := runtimeClient.Get(context.TODO(), types.NamespacedName{
+		if err := mcRtc.Get(context.TODO(), types.NamespacedName{
 			Name: managedProxyConfigurations[0],
 		}, proxyConfig); err != nil {
 			return nil, err
@@ -188,7 +189,7 @@ func GetClusterProxyValueFunc(
 		// find the referenced proxy load-balancer prescribed in the proxy config if there's any
 		var proxyServerLoadBalancer *corev1.Service
 		if proxyConfig.Spec.ProxyServer.Entrypoint.Type == proxyv1alpha1.EntryPointTypeLoadBalancerService {
-			entrySvc, err := nativeClient.CoreV1().
+			entrySvc, err := hostNativeClient.CoreV1().
 				Services(proxyConfig.Spec.ProxyServer.Namespace).
 				Get(context.TODO(),
 					proxyConfig.Spec.ProxyServer.Entrypoint.LoadBalancerService.Name,
@@ -228,7 +229,7 @@ func GetClusterProxyValueFunc(
 		// "agent-client" to the managed clusters.
 		certDataBase64, keyDataBase64 := "", ""
 		if !v1CSRSupported {
-			agentClientSecret, err := nativeClient.CoreV1().
+			agentClientSecret, err := hostNativeClient.CoreV1().
 				Secrets(signerNamespace).
 				Get(context.TODO(), common.AgentClientSecretName, metav1.GetOptions{})
 			if err != nil {
@@ -249,7 +250,7 @@ func GetClusterProxyValueFunc(
 
 		// List all available managedClusterSets
 		managedClusterSetList := &clusterv1beta2.ManagedClusterSetList{}
-		err = runtimeClient.List(context.TODO(), managedClusterSetList)
+		err = mcRtc.List(context.TODO(), managedClusterSetList)
 		if err != nil {
 			return nil, err
 		}
@@ -261,7 +262,7 @@ func GetClusterProxyValueFunc(
 
 		// List all available serviceResolvers
 		serviceResolverList := &proxyv1alpha1.ManagedProxyServiceResolverList{}
-		err = runtimeClient.List(context.TODO(), serviceResolverList)
+		err = mcRtc.List(context.TODO(), serviceResolverList)
 		if err != nil {
 			return nil, err
 		}

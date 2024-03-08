@@ -45,14 +45,16 @@ var _ reconcile.Reconciler = &ManagedProxyConfigurationReconciler{}
 var log = ctrl.Log.WithName("ClusterManagementAddonReconciler")
 
 func RegisterClusterManagementAddonReconciler(
-	mgr manager.Manager,
+	hostManager manager.Manager,
 	selfSigner selfsigned.SelfSigner,
-	nativeClient kubernetes.Interface,
-	secretInformer informercorev1.SecretInformer,
+	hostNativeClient kubernetes.Interface,
+	hostSecretInformer informercorev1.SecretInformer,
+	mcManager ctrl.Manager,
+	mcMode bool,
 	supportsV1CSR bool,
 ) error {
 	r := &ManagedProxyConfigurationReconciler{
-		Client:     mgr.GetClient(),
+		hostRtc:    hostManager.GetClient(),
 		SelfSigner: selfSigner,
 		CAPair:     selfSigner.CA(),
 		newCertRotatorFunc: func(namespace, name string, sans ...string) selfsigned.CertRotation {
@@ -61,38 +63,42 @@ func RegisterClusterManagementAddonReconciler(
 				Name:      name,
 				Validity:  time.Hour * 24 * 180,
 				HostNames: sans,
-				Lister:    secretInformer.Lister(),
-				Client:    nativeClient.CoreV1(),
+				Lister:    hostSecretInformer.Lister(),
+				Client:    hostNativeClient.CoreV1(),
 			}
 		},
-		SecretLister:     secretInformer.Lister(),
-		SecretGetter:     nativeClient.CoreV1(),
-		ServiceGetter:    nativeClient.CoreV1(),
-		DeploymentGetter: nativeClient.AppsV1(),
-		EventRecorder:    events.NewInMemoryRecorder("ClusterManagementAddonReconciler"),
+		hostSecretLister:     hostSecretInformer.Lister(),
+		hostSecretGetter:     hostNativeClient.CoreV1(),
+		hostServiceGetter:    hostNativeClient.CoreV1(),
+		hostDeploymentGetter: hostNativeClient.AppsV1(),
+		EventRecorder:        events.NewInMemoryRecorder("ClusterManagementAddonReconciler"),
 
+		mcRtc:         mcManager.GetClient(),
+		mcMode:        mcMode,
 		supportsV1CSR: supportsV1CSR,
 	}
-	return r.SetupWithManager(mgr)
+	return r.SetupWithManager(mcManager)
 }
 
 type ManagedProxyConfigurationReconciler struct {
-	client.Client
-	SelfSigner       selfsigned.SelfSigner
-	CAPair           *crypto.CA
-	SecretLister     corev1listers.SecretLister
-	SecretGetter     corev1client.SecretsGetter
-	DeploymentGetter appsv1client.DeploymentsGetter
-	ServiceGetter    corev1client.ServicesGetter
-	EventRecorder    events.Recorder
+	hostRtc              client.Client
+	SelfSigner           selfsigned.SelfSigner
+	CAPair               *crypto.CA
+	hostSecretLister     corev1listers.SecretLister
+	hostSecretGetter     corev1client.SecretsGetter
+	hostDeploymentGetter appsv1client.DeploymentsGetter
+	hostServiceGetter    corev1client.ServicesGetter
+	EventRecorder        events.Recorder
+	newCertRotatorFunc   func(namespace, name string, sans ...string) selfsigned.CertRotation
 
-	newCertRotatorFunc func(namespace, name string, sans ...string) selfsigned.CertRotation
-	supportsV1CSR      bool
+	mcRtc         client.Client
+	mcMode        bool
+	supportsV1CSR bool
 }
 
-func (c *ManagedProxyConfigurationReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (c *ManagedProxyConfigurationReconciler) SetupWithManager(mcManager ctrl.Manager) error {
 	// TODO should add a filter to only watch addon with cluster-proxy name
-	return ctrl.NewControllerManagedBy(mgr).
+	return ctrl.NewControllerManagedBy(mcManager).
 		For(&proxyv1alpha1.ManagedProxyConfiguration{}).
 		Complete(c)
 }
@@ -102,7 +108,7 @@ func (c *ManagedProxyConfigurationReconciler) Reconcile(ctx context.Context, req
 
 	// get the related proxy configuration
 	config := &proxyv1alpha1.ManagedProxyConfiguration{}
-	if err := c.Client.Get(ctx, types.NamespacedName{Name: request.Name}, config); err != nil {
+	if err := c.mcRtc.Get(ctx, types.NamespacedName{Name: request.Name}, config); err != nil {
 		return reconcile.Result{}, err
 	}
 
@@ -123,8 +129,16 @@ func (c *ManagedProxyConfigurationReconciler) Reconcile(ctx context.Context, req
 		return reconcile.Result{}, err
 	}
 
+	owner := config
+	if c.mcMode {
+		// get the host proxy configuration
+		if err := c.hostRtc.Get(ctx, types.NamespacedName{Name: request.Name}, owner); err != nil {
+			return reconcile.Result{}, err
+		}
+	}
+
 	// deploying central proxy server instances into the hub cluster.
-	isModified, err := c.deployProxyServer(config)
+	isModified, err := c.deployProxyServer(config, owner)
 	if err != nil {
 		return reconcile.Result{}, errors.Wrapf(err, "fails to deploy proxy server")
 	}
@@ -159,24 +173,24 @@ func (c *ManagedProxyConfigurationReconciler) refreshStatus(isModified bool, con
 		expectingCondition := cond
 		meta.SetStatusCondition(&editingConfig.Status.Conditions, expectingCondition)
 	}
-	return c.Client.Status().Update(context.TODO(), editingConfig)
+	return c.mcRtc.Status().Update(context.TODO(), editingConfig)
 }
 
-func (c *ManagedProxyConfigurationReconciler) deployProxyServer(config *proxyv1alpha1.ManagedProxyConfiguration) (bool, error) {
+func (c *ManagedProxyConfigurationReconciler) deployProxyServer(config, owner *proxyv1alpha1.ManagedProxyConfiguration) (bool, error) {
 	resources := []client.Object{
-		newServiceAccount(config),
-		newProxyService(config),
-		newProxySecret(config, c.SelfSigner.CAData()),
-		newProxyServerDeployment(config),
-		newProxyServerRole(config),
-		newProxyServerRoleBinding(config),
+		newServiceAccount(config, owner),
+		newProxyService(config, owner),
+		newProxySecret(config, owner, c.SelfSigner.CAData()),
+		newProxyServerDeployment(config, owner),
+		newProxyServerRole(config, owner),
+		newProxyServerRoleBinding(config, owner),
 	}
 	anyCreated := false
 	createdKinds := sets.NewString()
 	anyUpdated := false
 	updatedKinds := sets.NewString()
 	for _, resource := range resources {
-		gvks, _, err := c.Scheme().ObjectKinds(resource)
+		gvks, _, err := c.hostRtc.Scheme().ObjectKinds(resource)
 		if err != nil {
 			return false, err
 		}
@@ -224,7 +238,7 @@ func (c *ManagedProxyConfigurationReconciler) ensure(incomingGeneration int64, g
 	// create if it doesn't exist
 	current := &unstructured.Unstructured{}
 	current.SetGroupVersionKind(gvk)
-	if err := c.Client.Get(
+	if err := c.hostRtc.Get(
 		context.TODO(),
 		types.NamespacedName{
 			Namespace: resource.GetNamespace(),
@@ -239,7 +253,7 @@ func (c *ManagedProxyConfigurationReconciler) ensure(incomingGeneration int64, g
 			)
 		}
 		// if not found, then create
-		if err := c.Client.Create(context.TODO(), resource); err != nil {
+		if err := c.hostRtc.Create(context.TODO(), resource); err != nil {
 			if !apierrors.IsAlreadyExists(err) {
 				return false, false, errors.Wrapf(err,
 					"failed to create resource kind: %s, namespace: %s, name %s",
@@ -270,7 +284,7 @@ func (c *ManagedProxyConfigurationReconciler) ensure(incomingGeneration int64, g
 	// update if generation bumped
 	if !created && int(incomingGeneration) > currentGeneration {
 		resource.SetResourceVersion(current.GetResourceVersion())
-		if err := c.Client.Update(context.TODO(), resource); err != nil {
+		if err := c.hostRtc.Update(context.TODO(), resource); err != nil {
 			if apierrors.IsConflict(err) {
 				return c.ensure(incomingGeneration, gvk, resource)
 			}
@@ -353,7 +367,7 @@ func (c *ManagedProxyConfigurationReconciler) ensureEntrypoint(config *proxyv1al
 				},
 			},
 		}
-		if err := c.Client.Create(context.TODO(), proxyService); err != nil {
+		if err := c.hostRtc.Create(context.TODO(), proxyService); err != nil {
 			if !apierrors.IsAlreadyExists(err) {
 				return "", errors.Wrapf(err, "failed to ensure entrypoint service for proxy-server")
 			}
@@ -364,7 +378,7 @@ func (c *ManagedProxyConfigurationReconciler) ensureEntrypoint(config *proxyv1al
 	case proxyv1alpha1.EntryPointTypeLoadBalancerService:
 		namespace := config.Spec.ProxyServer.Namespace
 		name := config.Spec.ProxyServer.Entrypoint.LoadBalancerService.Name
-		lbSvc, err := c.ServiceGetter.Services(namespace).Get(context.TODO(), name, metav1.GetOptions{})
+		lbSvc, err := c.hostServiceGetter.Services(namespace).Get(context.TODO(), name, metav1.GetOptions{})
 		if err != nil {
 			return "", errors.Wrapf(err, "failed to get service %q/%q", namespace, name)
 		}
@@ -451,11 +465,11 @@ func (c *ManagedProxyConfigurationReconciler) ensureBasicResources(config *proxy
 }
 
 func (c *ManagedProxyConfigurationReconciler) ensureNamespace(config *proxyv1alpha1.ManagedProxyConfiguration) error {
-	if err := c.Client.Get(context.TODO(), types.NamespacedName{
+	if err := c.hostRtc.Get(context.TODO(), types.NamespacedName{
 		Name: config.Spec.ProxyServer.Namespace,
 	}, &corev1.Namespace{}); err != nil {
 		if apierrors.IsNotFound(err) {
-			if err := c.Client.Create(context.TODO(), &corev1.Namespace{
+			if err := c.hostRtc.Create(context.TODO(), &corev1.Namespace{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: config.Spec.ProxyServer.Namespace,
 				},
@@ -482,7 +496,7 @@ func (c *ManagedProxyConfigurationReconciler) getCurrentState(isRedeployed bool,
 	namespace := config.Spec.ProxyServer.Namespace
 	name := config.Name
 	isCurrentlyDeployed := true
-	scale, err := c.DeploymentGetter.Deployments(namespace).GetScale(context.TODO(), name, metav1.GetOptions{})
+	scale, err := c.hostDeploymentGetter.Deployments(namespace).GetScale(context.TODO(), name, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			isCurrentlyDeployed = false
@@ -491,7 +505,7 @@ func (c *ManagedProxyConfigurationReconciler) getCurrentState(isRedeployed bool,
 		}
 	}
 	isSigned := true
-	proxyServerSecret, err := c.SecretGetter.Secrets(namespace).
+	proxyServerSecret, err := c.hostSecretGetter.Secrets(namespace).
 		Get(context.TODO(),
 			config.Spec.Authentication.Dump.Secrets.SigningProxyServerSecretName,
 			metav1.GetOptions{})
@@ -503,7 +517,7 @@ func (c *ManagedProxyConfigurationReconciler) getCurrentState(isRedeployed bool,
 		}
 	}
 
-	agentServerSecret, err := c.SecretGetter.Secrets(namespace).
+	agentServerSecret, err := c.hostSecretGetter.Secrets(namespace).
 		Get(context.TODO(),
 			config.Spec.Authentication.Dump.Secrets.SigningAgentServerSecretName,
 			metav1.GetOptions{})
