@@ -24,25 +24,25 @@ func newOwnerReference(config *proxyv1alpha1.ManagedProxyConfiguration) metav1.O
 	}
 }
 
-func newServiceAccount(config *proxyv1alpha1.ManagedProxyConfiguration) *corev1.ServiceAccount {
+func newServiceAccount(config, owner *proxyv1alpha1.ManagedProxyConfiguration) *corev1.ServiceAccount {
 	return &corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: config.Spec.ProxyServer.Namespace,
 			Name:      common.AddonName,
 			OwnerReferences: []metav1.OwnerReference{
-				newOwnerReference(config),
+				newOwnerReference(owner),
 			},
 		},
 	}
 }
 
-func newProxySecret(config *proxyv1alpha1.ManagedProxyConfiguration, caData []byte) *corev1.Secret {
+func newProxySecret(config, owner *proxyv1alpha1.ManagedProxyConfiguration, caData []byte) *corev1.Secret {
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: config.Spec.ProxyServer.Namespace,
 			Name:      signerSecretName,
 			OwnerReferences: []metav1.OwnerReference{
-				newOwnerReference(config),
+				newOwnerReference(owner),
 			},
 		},
 		Data: map[string][]byte{
@@ -50,13 +50,13 @@ func newProxySecret(config *proxyv1alpha1.ManagedProxyConfiguration, caData []by
 		},
 	}
 }
-func newProxyService(config *proxyv1alpha1.ManagedProxyConfiguration) *corev1.Service {
+func newProxyService(config, owner *proxyv1alpha1.ManagedProxyConfiguration) *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: config.Spec.ProxyServer.Namespace,
 			Name:      config.Spec.ProxyServer.InClusterServiceName,
 			OwnerReferences: []metav1.OwnerReference{
-				newOwnerReference(config),
+				newOwnerReference(owner),
 			},
 		},
 		Spec: corev1.ServiceSpec{
@@ -78,13 +78,13 @@ func newProxyService(config *proxyv1alpha1.ManagedProxyConfiguration) *corev1.Se
 	}
 }
 
-func newProxyServerDeployment(config *proxyv1alpha1.ManagedProxyConfiguration) *appsv1.Deployment {
+func newProxyServerDeployment(config, owner *proxyv1alpha1.ManagedProxyConfiguration) *appsv1.Deployment {
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: config.Spec.ProxyServer.Namespace,
 			Name:      config.Name,
 			OwnerReferences: []metav1.OwnerReference{
-				newOwnerReference(config),
+				newOwnerReference(owner),
 			},
 			Labels: map[string]string{
 				common.AnnotationKeyConfigurationGeneration: strconv.Itoa(int(config.Generation)),
@@ -188,13 +188,13 @@ func newProxyServerDeployment(config *proxyv1alpha1.ManagedProxyConfiguration) *
 	}
 }
 
-func newProxyServerRole(config *proxyv1alpha1.ManagedProxyConfiguration) *rbacv1.Role {
+func newProxyServerRole(config, owner *proxyv1alpha1.ManagedProxyConfiguration) *rbacv1.Role {
 	return &rbacv1.Role{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: config.Spec.ProxyServer.Namespace,
 			Name:      "cluster-proxy-addon-agent:portforward",
 			OwnerReferences: []metav1.OwnerReference{
-				newOwnerReference(config),
+				newOwnerReference(owner),
 			},
 		},
 		Rules: []rbacv1.PolicyRule{
@@ -207,13 +207,13 @@ func newProxyServerRole(config *proxyv1alpha1.ManagedProxyConfiguration) *rbacv1
 	}
 }
 
-func newProxyServerRoleBinding(config *proxyv1alpha1.ManagedProxyConfiguration) *rbacv1.RoleBinding {
+func newProxyServerRoleBinding(config, owner *proxyv1alpha1.ManagedProxyConfiguration) *rbacv1.RoleBinding {
 	return &rbacv1.RoleBinding{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: config.Spec.ProxyServer.Namespace,
 			Name:      "cluster-proxy-addon-agent:portforward",
 			OwnerReferences: []metav1.OwnerReference{
-				newOwnerReference(config),
+				newOwnerReference(owner),
 			},
 		},
 		RoleRef: rbacv1.RoleRef{
