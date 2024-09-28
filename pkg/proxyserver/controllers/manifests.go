@@ -134,6 +134,9 @@ func newProxyServerDeployment(config, owner *proxyv1alpha1.ManagedProxyConfigura
 								RunAsNonRoot:             ptr.To(true),
 								ReadOnlyRootFilesystem:   ptr.To(true),
 								AllowPrivilegeEscalation: ptr.To(false),
+								SeccompProfile: &corev1.SeccompProfile{
+									Type: corev1.SeccompProfileTypeRuntimeDefault,
+								},
 							},
 							VolumeMounts: []corev1.VolumeMount{
 								{
