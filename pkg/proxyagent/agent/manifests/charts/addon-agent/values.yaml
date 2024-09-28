@@ -4,12 +4,6 @@ agentDeploymentName: cluster-proxy-proxy-agent
 
 includeNamespaceCreation: false
 
-# Image registry
-registry: quay.io/open-cluster-management
-
-# Image of the cluster-gateway instances
-image: cluster-proxy
-
 proxyAgentImage: quay.io/open-cluster-management/cluster-proxy:latest
 proxyAgentImagePullSecrets: []
 
