@@ -245,18 +245,13 @@ func GetClusterProxyValueFunc(
 			keyDataBase64 = base64.StdEncoding.EncodeToString(agentClientSecret.Data[corev1.TLSPrivateKeyKey])
 		}
 
-		registry, image, tag, err := config.GetParsedAgentImage(proxyConfig.Spec.ProxyAgent.Image)
-		if err != nil {
-			return nil, err
-		}
-
 		// Get agentIndentifiers and servicesToExpose.
 		// agetnIdentifiers is used in `--agent-identifiers` flag in addon-agent-deployment.yaml.
 		// servicesToExpose defines the services we want to expose to the hub.
 
 		// List all available managedClusterSets
 		managedClusterSetList := &clusterv1beta2.ManagedClusterSetList{}
-		err = mcRtc.List(context.TODO(), managedClusterSetList)
+		err := mcRtc.List(context.TODO(), managedClusterSetList)
 		if err != nil {
 			return nil, err
 		}
@@ -300,9 +295,6 @@ func GetClusterProxyValueFunc(
 			"spokeAddonNamespace":           addon.Spec.InstallNamespace,
 			"additionalProxyAgentArgs":      proxyConfig.Spec.ProxyAgent.AdditionalArgs,
 			"clusterName":                   cluster.Name,
-			"registry":                      registry,
-			"image":                         image,
-			"tag":                           tag,
 			"proxyAgentImage":               proxyConfig.Spec.ProxyAgent.Image,
 			"proxyAgentImagePullSecrets":    proxyConfig.Spec.ProxyAgent.ImagePullSecrets,
 			"replicas":                      proxyConfig.Spec.ProxyAgent.Replicas,
