@@ -23,7 +23,7 @@ spec:
         open-cluster-management.io/addon: cluster-proxy
         proxy.open-cluster-management.io/component-name: proxy-agent
     spec:
-      serviceAccount: cluster-proxy
+      serviceAccountName: cluster-proxy
       {{- if .Values.tolerations }}
       tolerations: {{ toYaml .Values.tolerations | nindent 8 }}
       {{- end }}
@@ -92,7 +92,7 @@ spec:
               memory: "200Mi"
               cpu: "300m"
         - name: addon-agent
-          image: {{ .Values.registry }}/{{ .Values.image }}:{{ .Values.tag }}
+          image: {{ .Values.proxyAgentImage }}
           imagePullPolicy: IfNotPresent
           command:
             - /agent
