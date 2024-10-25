@@ -1,10 +1,10 @@
 # Build the manager binary
-FROM golang:1.21 as builder
+FROM golang:1.23 as builder
 
 WORKDIR /workspace
 
 ARG APISERVER_NETWORK_PROXY_VERSION=0.29.0
-ARG KUBECTL_VERSION=v1.23.1
+ARG KUBECTL_VERSION=v1.31.0
 ARG ADDON_AGENT_IMAGE_NAME
 
 # Build Apiserver-network-proxy binaries
@@ -38,7 +38,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a \
 
 # Use distroless as minimal base image to package the manager binary
 # Refer to https://github.com/GoogleContainerTools/distroless for more details
-FROM alpine:3.13
+FROM alpine
 
 WORKDIR /
 RUN apk add libc6-compat
