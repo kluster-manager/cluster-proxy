@@ -3,6 +3,9 @@ FROM golang:1.23 as builder
 
 WORKDIR /workspace
 
+ARG TARGETPLATFORM
+ARG TARGETARCH
+
 ARG APISERVER_NETWORK_PROXY_VERSION=0.30.2
 ARG KUBECTL_VERSION=v1.30.2
 ARG ADDON_AGENT_IMAGE_NAME
@@ -11,28 +14,19 @@ ARG ADDON_AGENT_IMAGE_NAME
 RUN wget https://github.com/kubernetes-sigs/apiserver-network-proxy/archive/refs/tags/v${APISERVER_NETWORK_PROXY_VERSION}.tar.gz \
       && tar xzvf v${APISERVER_NETWORK_PROXY_VERSION}.tar.gz \
       && cd apiserver-network-proxy-${APISERVER_NETWORK_PROXY_VERSION} \
-      && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /workspace/proxy-server ./cmd/server/ \
-      && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /workspace/proxy-agent ./cmd/agent/ \
-      && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /workspace/proxy-test-client ./cmd/test-client/ \
-      && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /workspace/proxy-test-server ./cmd/test-server/ \
+      && CGO_ENABLED=0 go build -o /workspace/proxy-server ./cmd/server/ \
+      && CGO_ENABLED=0 go build -o /workspace/proxy-agent ./cmd/agent/ \
+      && CGO_ENABLED=0 go build -o /workspace/proxy-test-client ./cmd/test-client/ \
+      && CGO_ENABLED=0 go build -o /workspace/proxy-test-server ./cmd/test-server/ \
       && cd /workspace \
-      && curl -LO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" \
+      && curl -LO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${TARGETARCH}/kubectl" \
       && chmod a+x kubectl
 
-# Copy the Go Modules manifests
-COPY go.mod go.mod
-COPY go.sum go.sum
-# cache deps before building and copying source so that we don't need to re-download as much
-# and so that source changes don't invalidate our downloaded layer
-RUN go mod download
-
-# Copy the go source
-COPY cmd/ cmd/
-COPY pkg pkg/
+COPY . .
 
 # Build addons
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -o agent cmd/addon-agent/main.go
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a \
+RUN CGO_ENABLED=0 go build -a -o agent cmd/addon-agent/main.go
+RUN CGO_ENABLED=0 go build -a \
         -ldflags="-X 'open-cluster-management.io/cluster-proxy/pkg/config.AgentImageName=${ADDON_AGENT_IMAGE_NAME}'" \
         -o manager cmd/addon-manager/main.go
 
