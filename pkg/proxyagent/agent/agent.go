@@ -258,11 +258,6 @@ func GetClusterProxyValueFunc(
 			serviceEntryPointPort = 8091
 		}
 
-		registry, image, tag, err := config.GetParsedAgentImage(proxyConfig.Spec.ProxyAgent.Image)
-		if err != nil {
-			return nil, err
-		}
-
 		// get agent namespace from addon status
 		namespace := config.DefaultAddonInstallNamespace
 		if len(addon.Status.Namespace) > 0 {
@@ -275,7 +270,7 @@ func GetClusterProxyValueFunc(
 
 		// List all available managedClusterSets
 		managedClusterSetList := &clusterv1beta2.ManagedClusterSetList{}
-		err = runtimeClient.List(context.TODO(), managedClusterSetList)
+		err := runtimeClient.List(context.TODO(), managedClusterSetList)
 		if err != nil {
 			return nil, err
 		}
@@ -321,9 +316,6 @@ func GetClusterProxyValueFunc(
 			"spokeAddonNamespace":          addon.Spec.InstallNamespace,
 			"additionalProxyAgentArgs":     proxyConfig.Spec.ProxyAgent.AdditionalArgs,
 			"clusterName":                  cluster.Name,
-			"registry":                     registry,
-			"image":                        image,
-			"tag":                          tag,
 			"proxyAgentImage":              proxyConfig.Spec.ProxyAgent.Image,
 			"proxyAgentImagePullSecrets":   proxyConfig.Spec.ProxyAgent.ImagePullSecrets,
 			"replicas":                     proxyConfig.Spec.ProxyAgent.Replicas,
