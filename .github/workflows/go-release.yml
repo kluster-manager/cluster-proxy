@@ -17,8 +17,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
+          fetch-tags: true
           fetch-depth: 1
       - name: get release version
         run: |
@@ -43,8 +44,9 @@ jobs:
         arch: [ amd64, arm64 ]
     steps:
       - name: checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
+          fetch-tags: true
           fetch-depth: 1
       - name: install Go
         uses: actions/setup-go@v2
@@ -69,8 +71,9 @@ jobs:
     needs: [ env, images ]
     steps:
       - name: checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
+          fetch-tags: true
           fetch-depth: 1
       - name: create
         run: |
@@ -93,8 +96,9 @@ jobs:
     needs: [ env, image-manifest ]
     steps:
       - name: checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
+          fetch-tags: true
           fetch-depth: 1
       - name: setup helm
         uses: azure/setup-helm@v1
@@ -108,7 +112,7 @@ jobs:
         run: |
           echo "# Cluster Proxy ${{ needs.env.outputs.RELEASE_VERSION }}" > /home/runner/work/changelog.txt
       - name: publish release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@26994186c0ac3ef5cae75ac16aa32e8153525f77 # v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -119,7 +123,7 @@ jobs:
           prerelease: false
           generate_release_notes: true
       - name: submit charts to OCM chart repo
-        uses: actions/github-script@v6
+        uses: actions/github-script@00f12e3e20659f42342b1c0226afda7f7c042325 # v6
         with:
           github-token: ${{ secrets.OCM_BOT_PAT }}
           script: |
