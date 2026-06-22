@@ -213,7 +213,25 @@ func newProxyServerRole(config *proxyv1alpha1.ManagedProxyConfiguration) *rbacv1
 	}
 }
 
-func newProxyServerRoleBinding(config *proxyv1alpha1.ManagedProxyConfiguration) *rbacv1.RoleBinding {
+// newProxyServerRoleBinding binds the port-forward Role to the agent identity for
+// both registration modes: the group subject covers CSR (client-cert) agents, and
+// one ServiceAccount subject per addon namespace covers token-based agents.
+func newProxyServerRoleBinding(config *proxyv1alpha1.ManagedProxyConfiguration, agentServiceAccountNamespaces []string) *rbacv1.RoleBinding {
+	subjects := []rbacv1.Subject{
+		// CSR registration: the agent's client cert carries this group.
+		{
+			Kind:     rbacv1.GroupKind,
+			APIGroup: rbacv1.GroupName,
+			Name:     common.SubjectGroupClusterProxy,
+		},
+	}
+	for _, ns := range agentServiceAccountNamespaces {
+		subjects = append(subjects, rbacv1.Subject{
+			Kind:      rbacv1.ServiceAccountKind,
+			Name:      common.AddonAgentServiceAccountName,
+			Namespace: ns,
+		})
+	}
 	return &rbacv1.RoleBinding{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: config.Spec.ProxyServer.Namespace,
@@ -226,12 +244,7 @@ func newProxyServerRoleBinding(config *proxyv1alpha1.ManagedProxyConfiguration) 
 			Kind: "Role",
 			Name: "cluster-proxy-addon-agent:portforward",
 		},
-		Subjects: []rbacv1.Subject{
-			{
-				Kind: rbacv1.GroupKind,
-				Name: common.SubjectGroupClusterProxy,
-			},
-		},
+		Subjects: subjects,
 	}
 
 }

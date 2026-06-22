@@ -6,7 +6,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
+	rbacv1 "k8s.io/api/rbac/v1"
 	proxyv1alpha1 "open-cluster-management.io/cluster-proxy/pkg/apis/proxy/v1alpha1"
+	"open-cluster-management.io/cluster-proxy/pkg/common"
 	sdktls "open-cluster-management.io/sdk-go/pkg/tls"
 )
 
@@ -111,4 +113,34 @@ func TestTLSConfigHash_EmptyConfig(t *testing.T) {
 	hash := tlsConfigHash(&sdktls.TLSConfig{})
 	assert.NotEmpty(t, hash)
 	assert.Len(t, hash, 16)
+}
+
+func TestNewProxyServerRoleBinding_BindsAgentServiceAccounts(t *testing.T) {
+	binding := newProxyServerRoleBinding(newTestConfig(1), []string{"cluster-a", "cluster-b"})
+
+	// The compatibility group subject is always present.
+	assert.Contains(t, binding.Subjects, rbacv1.Subject{
+		Kind:     rbacv1.GroupKind,
+		APIGroup: rbacv1.GroupName,
+		Name:     common.SubjectGroupClusterProxy,
+	})
+
+	// Each managed-cluster namespace gets exactly its own agent ServiceAccount.
+	for _, ns := range []string{"cluster-a", "cluster-b"} {
+		assert.Contains(t, binding.Subjects, rbacv1.Subject{
+			Kind:      rbacv1.ServiceAccountKind,
+			Name:      common.AddonAgentServiceAccountName,
+			Namespace: ns,
+		}, "expected agent ServiceAccount subject for namespace %q", ns)
+	}
+	assert.Len(t, binding.Subjects, 3)
+}
+
+func TestNewProxyServerRoleBinding_NoClusters(t *testing.T) {
+	binding := newProxyServerRoleBinding(newTestConfig(1), nil)
+
+	// With no managed clusters, only the inert group subject remains; no
+	// ServiceAccount is granted access.
+	assert.Len(t, binding.Subjects, 1)
+	assert.Equal(t, rbacv1.GroupKind, binding.Subjects[0].Kind)
 }

@@ -6,6 +6,10 @@ const (
 	AddonName     = "cluster-proxy"
 	AddonFullName = "open-cluster-management:cluster-proxy"
 
+	// AddonAgentServiceAccountName is the agent ServiceAccount OCM provisions in
+	// each cluster namespace on the hub under token-based registration.
+	AddonAgentServiceAccountName = AddonName + "-agent"
+
 	ComponentNameProxyAgentServer = "proxy-agent-server"
 	ComponentNameProxyServer      = "proxy-server"
 	ComponentNameProxyAgent       = "proxy-agent"
