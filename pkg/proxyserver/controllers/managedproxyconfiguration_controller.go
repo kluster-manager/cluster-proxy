@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	addonv1alpha1 "open-cluster-management.io/api/addon/v1alpha1"
 	proxyv1alpha1 "open-cluster-management.io/cluster-proxy/pkg/apis/proxy/v1alpha1"
 	"open-cluster-management.io/cluster-proxy/pkg/common"
 	"open-cluster-management.io/cluster-proxy/pkg/constant"
@@ -20,6 +21,7 @@ import (
 	"github.com/pkg/errors"
 
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -37,8 +39,12 @@ import (
 	"k8s.io/klog/v2"
 	"k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
@@ -94,10 +100,38 @@ type ManagedProxyConfigurationReconciler struct {
 }
 
 func (c *ManagedProxyConfigurationReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	// TODO should add a filter to only watch addon with cluster-proxy name
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&proxyv1alpha1.ManagedProxyConfiguration{}).
+		// Re-sync the port-forward RoleBinding when a cluster-proxy addon is
+		// installed or removed; updates don't change cluster membership.
+		Watches(
+			&addonv1alpha1.ManagedClusterAddOn{},
+			handler.EnqueueRequestsFromMapFunc(c.mapAddonToProxyConfigurations),
+			builder.WithPredicates(predicate.Funcs{
+				UpdateFunc: func(event.UpdateEvent) bool { return false },
+			}),
+		).
 		Complete(c)
+}
+
+// mapAddonToProxyConfigurations enqueues all ManagedProxyConfigurations on a
+// cluster-proxy addon change; other addons are ignored.
+func (c *ManagedProxyConfigurationReconciler) mapAddonToProxyConfigurations(ctx context.Context, obj client.Object) []reconcile.Request {
+	if obj.GetName() != common.AddonName {
+		return nil
+	}
+	configList := &proxyv1alpha1.ManagedProxyConfigurationList{}
+	if err := c.List(ctx, configList); err != nil {
+		log.Error(err, "failed to list ManagedProxyConfigurations for addon mapping")
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, len(configList.Items))
+	for i := range configList.Items {
+		requests = append(requests, reconcile.Request{
+			NamespacedName: types.NamespacedName{Name: configList.Items[i].Name},
+		})
+	}
+	return requests
 }
 
 func (c *ManagedProxyConfigurationReconciler) Reconcile(ctx context.Context, request reconcile.Request) (reconcile.Result, error) {
@@ -172,7 +206,9 @@ func (c *ManagedProxyConfigurationReconciler) deployProxyServer(config *proxyv1a
 		newProxySecret(config, c.SelfSigner.CAData()),
 		newProxyServerDeployment(config, c.imagePullPolicy),
 		newProxyServerRole(config),
-		newProxyServerRoleBinding(config),
+		// The port-forward RoleBinding is reconciled by ensurePortForwardRoleBinding
+		// below, not here: its subjects track cluster membership, not the generation
+		// that ensure() keys on.
 	}
 	anyCreated := false
 	createdKinds := sets.NewString()
@@ -209,7 +245,62 @@ func (c *ManagedProxyConfigurationReconciler) deployProxyServer(config *proxyv1a
 		c.EventRecorder.ForComponent("ClusterManagementAddonReconciler").
 			Eventf("ProxyServerUpdated", "Resources are updated: %v", updatedKinds)
 	}
-	return anyCreated || anyUpdated, nil
+
+	rbModified, err := c.ensurePortForwardRoleBinding(config)
+	if err != nil {
+		return false, err
+	}
+
+	return anyCreated || anyUpdated || rbModified, nil
+}
+
+// ensurePortForwardRoleBinding binds the port-forward Role to the agent
+// ServiceAccount of every namespace running the cluster-proxy addon, reconciling
+// by subject diff so it tracks clusters being added or removed.
+func (c *ManagedProxyConfigurationReconciler) ensurePortForwardRoleBinding(config *proxyv1alpha1.ManagedProxyConfiguration) (bool, error) {
+	addonList := &addonv1alpha1.ManagedClusterAddOnList{}
+	if err := c.List(context.TODO(), addonList); err != nil {
+		return false, errors.Wrap(err, "failed to list managedclusteraddons")
+	}
+	namespaces := sets.NewString()
+	for i := range addonList.Items {
+		if addonList.Items[i].Name == common.AddonName {
+			namespaces.Insert(addonList.Items[i].Namespace)
+		}
+	}
+
+	desired := newProxyServerRoleBinding(config, namespaces.List())
+
+	current := &rbacv1.RoleBinding{}
+	err := c.Get(context.TODO(), types.NamespacedName{
+		Namespace: desired.Namespace,
+		Name:      desired.Name,
+	}, current)
+	if apierrors.IsNotFound(err) {
+		if err := c.Create(context.TODO(), desired); err != nil && !apierrors.IsAlreadyExists(err) {
+			return false, errors.Wrap(err, "failed to create port-forward rolebinding")
+		}
+		return true, nil
+	}
+	if err != nil {
+		return false, errors.Wrap(err, "failed to get port-forward rolebinding")
+	}
+
+	if equality.Semantic.DeepEqual(current.Subjects, desired.Subjects) {
+		return false, nil
+	}
+
+	// RoleRef is immutable; only the subjects are updated in place.
+	current.Subjects = desired.Subjects
+	if err := c.Update(context.TODO(), current); err != nil {
+		if apierrors.IsConflict(err) {
+			return c.ensurePortForwardRoleBinding(config)
+		}
+		return false, errors.Wrap(err, "failed to update port-forward rolebinding")
+	}
+	c.EventRecorder.ForComponent("ClusterManagementAddonReconciler").
+		Eventf("ProxyServerUpdated", "Port-forward RoleBinding subjects updated")
+	return true, nil
 }
 
 func (c *ManagedProxyConfigurationReconciler) ensure(incomingGeneration int64, gvk schema.GroupVersionKind, resource client.Object) (bool, bool, error) {
